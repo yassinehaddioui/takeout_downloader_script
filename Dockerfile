@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY takeout.py .
 COPY google_takeout_web.py .
+COPY discord_notifier.py .
 
 # Create downloads directory
 RUN mkdir -p /downloads

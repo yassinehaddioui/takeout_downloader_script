@@ -34,6 +34,7 @@ from takeout import (
     VERSION, CHUNK_SIZE, DEFAULT_FILE_COUNT, DEFAULT_OUTPUT_DIR, DEFAULT_PARALLEL,
     MAX_PARALLEL, MAX_FILE_COUNT, MIN_ARCHIVE_SIZE
 )
+from discord_notifier import DiscordNotifier
 
 
 @dataclass
@@ -132,6 +133,7 @@ class TakeoutTUI(App):
         self.bytes_at_last_update = 0
         self.last_update_time = datetime.now()
         self._lock = threading.Lock()
+        self.notifier = DiscordNotifier.from_env()
     
     def compose(self) -> ComposeResult:
         yield Header()
@@ -233,6 +235,7 @@ class TakeoutTUI(App):
     def action_quit(self) -> None:
         if self.is_downloading and self.downloader:
             self.downloader.stop()
+        self.notifier.close()
         self.exit()
     
     def action_start(self) -> None:
@@ -338,9 +341,19 @@ class TakeoutTUI(App):
 
         if not to_download:
             self.call_from_thread(self.log_message, "All files downloaded!")
+            self.notifier.session_finished(
+                completed=self.stats.completed_files, skipped=self.stats.skipped_files,
+                not_found=self.stats.not_found_files, failed=self.stats.failed_files,
+                bytes_downloaded=self.stats.bytes_downloaded,
+            )
             self.call_from_thread(self.download_complete)
             return
 
+        total_parts = len(to_download) + skipped
+        self.notifier.session_started(
+            total=len(to_download), skipped=skipped, parallel=parallel,
+            output_dir=str(self.downloader.output_dir),
+        )
         self.call_from_thread(self.log_message, f"Downloading {len(to_download)} files...")
 
         # Parallel downloads
@@ -365,6 +378,7 @@ class TakeoutTUI(App):
                 except Exception as e:
                     self.call_from_thread(self.log_message, f"✗ {filename}: {e}")
                     self.stats.failed_files += 1
+                    self.notifier.archive_failed(filename, str(e))
                     self.call_from_thread(self.update_stats_display)
                     self.call_from_thread(self.update_downloads_table)
                     continue
@@ -372,24 +386,48 @@ class TakeoutTUI(App):
                 if success:
                     self.call_from_thread(self.log_message, f"✓ {filename}")
                     self.stats.completed_files += 1
+                    try:
+                        size = self.downloader.get_filepath(num).stat().st_size
+                    except OSError:
+                        size = 0
+                    self.notifier.archive_completed(
+                        filename=filename, size=size,
+                        completed=self.stats.completed_files, total=total_parts,
+                        bytes_downloaded=self.stats.bytes_downloaded,
+                    )
                 elif error == "AUTH_FAILED":
                     self.call_from_thread(self.log_message, f"✗ {filename}: Auth failed!")
                     self.downloader.auth_failed = True
                 elif error == "NOT_FOUND":
                     self.call_from_thread(self.log_message, f"⊘ {filename}: Not found")
                     self.stats.not_found_files += 1
+                    self.notifier.archive_not_found(filename)
                 elif error == "STOPPED":
                     pass
                 else:
                     self.call_from_thread(self.log_message, f"✗ {filename}: {error}")
                     self.stats.failed_files += 1
+                    self.notifier.archive_failed(filename, error)
 
                 self.call_from_thread(self.update_stats_display)
                 self.call_from_thread(self.update_downloads_table)
         
         if self.downloader.auth_failed:
+            self.notifier.auth_required()
             self.call_from_thread(self.handle_auth_failure)
         else:
+            if self.downloader.should_stop:
+                saved = sum(
+                    1 for num in to_download
+                    if get_temp_path(self.downloader.get_filepath(num)).exists()
+                )
+                self.notifier.stopped(saved)
+            else:
+                self.notifier.session_finished(
+                    completed=self.stats.completed_files, skipped=self.stats.skipped_files,
+                    not_found=self.stats.not_found_files, failed=self.stats.failed_files,
+                    bytes_downloaded=self.stats.bytes_downloaded,
+                )
             self.call_from_thread(self.download_complete)
     
     def download_file(self, num: int) -> tuple:

@@ -23,6 +23,7 @@ from takeout import (
     get_range_total, partial_matches_size,
     CHUNK_SIZE, MAX_PARALLEL, MAX_FILE_COUNT, MIN_ARCHIVE_SIZE,
 )
+from discord_notifier import DiscordNotifier
 import requests
 
 # ============================================================================
@@ -353,6 +354,7 @@ def run_downloads(cookie: str, url: str, output_dir: str, parallel: int, file_co
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from itertools import islice
 
+    notifier = DiscordNotifier.from_env()
     saved_partials = None
     terminal_event = None
     try:
@@ -382,6 +384,7 @@ def run_downloads(cookie: str, url: str, output_dir: str, parallel: int, file_co
 
         if base_url is None:
             add_log('Invalid URL format', 'error')
+            notifier.error('Invalid download URL. Check the cURL command and try again.')
             terminal_event = ('error', {'message': 'Invalid URL format'})
             return
 
@@ -391,6 +394,7 @@ def run_downloads(cookie: str, url: str, output_dir: str, parallel: int, file_co
         except OSError as e:
             message = f'Cannot create output directory {output_dir!r}: {e}'
             add_log(message, 'error')
+            notifier.error(message)
             terminal_event = ('error', {'message': message})
             return
 
@@ -435,12 +439,22 @@ def run_downloads(cookie: str, url: str, output_dir: str, parallel: int, file_co
                 saved_partials = []
                 return
             add_log('All files already downloaded!', 'success')
+            stats = download_state['stats']
+            notifier.session_finished(
+                completed=stats['completed_files'], skipped=stats['skipped_files'],
+                not_found=stats['not_found_files'], failed=stats['failed_files'],
+                bytes_downloaded=stats['bytes_downloaded'],
+            )
             terminal_event = ('download_complete', {
                 'message': 'All files already downloaded',
-                'stats': download_state['stats'],
+                'stats': stats,
             })
             return
 
+        notifier.session_started(
+            total=len(to_download), skipped=skipped, parallel=parallel,
+            output_dir=output_dir,
+        )
         add_log(f'Checking up to {len(to_download)} remaining parts...', 'info')
 
         auth_failed = False
@@ -476,13 +490,22 @@ def run_downloads(cookie: str, url: str, output_dir: str, parallel: int, file_co
                     add_log(f"✓ {filename} ({result['size']/(1024*1024):.1f} MB)", 'success')
                     with state_lock:
                         download_state['stats']['completed_files'] += 1
+                        stats_snapshot = dict(download_state['stats'])
                     update_file_state(idx, 'complete', 100)
+                    notifier.archive_completed(
+                        filename=filename,
+                        size=result['size'],
+                        completed=stats_snapshot['completed_files'],
+                        total=stats_snapshot['total_files'],
+                        bytes_downloaded=stats_snapshot['bytes_downloaded'],
+                    )
                 elif result['stopped']:
                     update_file_state(idx, 'stopped')
                 elif result['auth_failed']:
                     add_log(f"✗ {filename}: {result['message']}", 'error')
                     update_file_state(idx, 'failed')
                     auth_failed = True
+                    notifier.auth_required()
                     emit_status('file_complete', result)
                     break
                 elif result['not_found']:
@@ -490,11 +513,13 @@ def run_downloads(cookie: str, url: str, output_dir: str, parallel: int, file_co
                     with state_lock:
                         download_state['stats']['not_found_files'] += 1
                     update_file_state(idx, 'not_found')
+                    notifier.archive_not_found(filename)
                 else:
                     add_log(f"✗ {filename}: {result['message']}", 'error')
                     with state_lock:
                         download_state['stats']['failed_files'] += 1
                     update_file_state(idx, 'failed')
+                    notifier.archive_failed(filename, result['message'])
 
                 emit_status('file_complete', result)
                 emit_status('stats_update', download_state['stats'])
@@ -510,6 +535,7 @@ def run_downloads(cookie: str, url: str, output_dir: str, parallel: int, file_co
         elif download_state['should_stop']:
             saved_partials = get_saved_partials(to_download)
             add_log('⏹ Download stopped', 'warning')
+            notifier.stopped(len(saved_partials))
         else:
             stats = download_state['stats']
             add_log(
@@ -517,19 +543,28 @@ def run_downloads(cookie: str, url: str, output_dir: str, parallel: int, file_co
                 f"{stats['not_found_files']} missing, {stats['failed_files']} failed",
                 'success',
             )
+            notifier.session_finished(
+                completed=stats['completed_files'], skipped=stats['skipped_files'],
+                not_found=stats['not_found_files'], failed=stats['failed_files'],
+                bytes_downloaded=stats['bytes_downloaded'],
+            )
             terminal_event = ('download_complete', {'message': 'Done!', 'stats': stats})
     except Exception as e:
         # Never leave the UI stuck in "running" if something unexpected blows up.
         add_log(f'Unexpected error: {e}', 'error')
+        notifier.error(f'Unexpected error: {e}')
         terminal_event = ('error', {'message': f'Unexpected error: {e}'})
     finally:
-        with state_lock:
-            download_state['is_running'] = False
-            download_state['saved_partials'] = saved_partials
-            if saved_partials is not None:
-                emit_status('download_stopped', {'message': 'Download stopped', 'saved_partials': saved_partials})
-            elif terminal_event is not None:
-                emit_status(*terminal_event)
+        try:
+            with state_lock:
+                download_state['is_running'] = False
+                download_state['saved_partials'] = saved_partials
+                if saved_partials is not None:
+                    emit_status('download_stopped', {'message': 'Download stopped', 'saved_partials': saved_partials})
+                elif terminal_event is not None:
+                    emit_status(*terminal_event)
+        finally:
+            notifier.close()
 
 # ============================================================================
 # WEB ROUTES

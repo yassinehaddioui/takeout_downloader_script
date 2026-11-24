@@ -64,6 +64,7 @@ def build():
         "--hidden-import", "flask",
         "--hidden-import", "flask_socketio",
         "--hidden-import", "engineio.async_drivers.threading",
+        "--hidden-import", "discord_notifier",
         # Collect submodules
         "--collect-submodules", "textual",
         "--collect-submodules", "rich",
@@ -72,6 +73,7 @@ def build():
         # Add data files
         "--add-data", f"google_takeout_tui.py{':' if current_platform != 'windows' else ';'}.",
         "--add-data", f"google_takeout_web.py{':' if current_platform != 'windows' else ';'}.",
+        "--add-data", f"discord_notifier.py{':' if current_platform != 'windows' else ';'}.",
         # Main script
         "takeout.py",
     ]

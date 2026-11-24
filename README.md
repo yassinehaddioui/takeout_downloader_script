@@ -17,6 +17,7 @@ A simple, robust tool to bulk download Google Takeout archives. Available as **T
 - **Resume Support** - Tracks file sizes to detect incomplete downloads
 - **Simple** - Just paste your cURL command and go
 - **PowerShell Support** - Works with both bash cURL and PowerShell Invoke-WebRequest
+- **Discord Notifications** - Optional webhook updates for finished archives, errors, and run status
 
 ## Quick Start
 
@@ -114,6 +115,37 @@ Options:
   -v, --version   Show version
 ```
 
+## Discord Notifications
+
+Set `DISCORD_WEBHOOK_URL` to stream download activity to a Discord channel. This
+works in both TUI and web mode and is disabled by default.
+
+1. In Discord, open **Server Settings → Integrations → Webhooks**.
+2. Create a webhook for the channel you want and copy its URL.
+3. Export the URL before starting the downloader:
+
+```bash
+export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/123456789/abcdef..."
+python takeout.py --web
+```
+
+For Docker, add `DISCORD_WEBHOOK_URL=...` to `.env` (see
+[.env.example](.env.example)); `docker-compose.yml` passes it into the container.
+
+Notifications are sent for:
+
+- Download session start (part count, parallel workers, output directory)
+- Each archive finished (size, progress, total bytes downloaded)
+- Archive failures and 404s
+- Expired authentication
+- Manual stops (including partial archives kept for resume)
+- Final summary or unexpected errors
+
+Messages are queued and sent in the background, so a slow or unreachable
+webhook never blocks downloads. The notifier throttles messages to stay within
+Discord's webhook rate limits and silently drops events if Discord is
+unavailable. The webhook URL is never included in logs.
+
 ## Docker
 
 ### Using Docker Compose (Recommended)
@@ -159,6 +191,7 @@ Open `http://localhost:5001`.
 | `FILE_COUNT` | Max archive parts to look for | `100` |
 | `SECRET_KEY` | Flask session secret | random per start |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated Socket.IO origins | same-origin |
+| `DISCORD_WEBHOOK_URL` | Discord webhook for download notifications | unset (disabled) |
 
 ## Pre-built Binaries
 
@@ -221,6 +254,7 @@ Google sessions expire after ~1 hour. When this happens:
 takeout.py            # Shared download engine + main entry point
 google_takeout_tui.py # TUI interface (textual)
 google_takeout_web.py # Web interface (Flask)
+discord_notifier.py   # Optional Discord webhook notifications
 dedupe_takeout.py     # Find/remove byte-identical archives
 requirements.txt      # Python dependencies
 requirements-dev.txt  # Test/build dependencies

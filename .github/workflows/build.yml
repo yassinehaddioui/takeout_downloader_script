@@ -56,6 +56,7 @@ jobs:
             --hidden-import markupsafe \
             --hidden-import textual \
             --hidden-import rich \
+            --hidden-import discord_notifier \
             --collect-submodules flask \
             --collect-submodules flask_socketio \
             --collect-submodules engineio \
@@ -64,6 +65,7 @@ jobs:
             --collect-submodules rich \
             --add-data "google_takeout_tui.py:." \
             --add-data "google_takeout_web.py:." \
+            --add-data "discord_notifier.py:." \
             takeout.py
 
       - name: Build executable (Windows)
@@ -82,6 +84,7 @@ jobs:
             --hidden-import markupsafe `
             --hidden-import textual `
             --hidden-import rich `
+            --hidden-import discord_notifier `
             --collect-submodules flask `
             --collect-submodules flask_socketio `
             --collect-submodules engineio `
@@ -90,6 +93,7 @@ jobs:
             --collect-submodules rich `
             --add-data "google_takeout_tui.py;." `
             --add-data "google_takeout_web.py;." `
+            --add-data "discord_notifier.py;." `
             takeout.py
 
       - name: Upload artifact

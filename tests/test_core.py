@@ -589,3 +589,53 @@ def test_web_stop_and_restart_resumes_both_parts(tmp_path, monkeypatch):
     assert all(part['total'] == len(SAMPLE_ZIP) for part in starts.values())
     for part in range(1, 4):
         assert (tmp_path / f'{PART_PREFIX[1:]}{part:03d}.zip').read_bytes() == SAMPLE_ZIP
+
+
+def test_web_downloads_emit_discord_events(tmp_path, archive_server, monkeypatch):
+    import google_takeout_web as web
+
+    base_url, handler = archive_server
+    handler.files = {f'{PART_PREFIX}001.zip': SAMPLE_ZIP}
+    monkeypatch.setattr(web.socketio, 'emit', lambda *args, **kwargs: None)
+    _reset_web_state()
+
+    created = []
+
+    class RecordingNotifier:
+        def __init__(self):
+            self.events = []
+            self.closed = False
+
+        @classmethod
+        def from_env(cls):
+            notifier = cls()
+            created.append(notifier)
+            return notifier
+
+        def __getattr__(self, name):
+            if name.startswith('_'):
+                raise AttributeError(name)
+
+            def record(*args, **kwargs):
+                self.events.append((name, args, kwargs))
+
+            return record
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(web, 'DiscordNotifier', RecordingNotifier)
+    url = f'{base_url}{PART_PREFIX}001.zip?i=0'
+    with web.state_lock:
+        web.download_state['is_running'] = True
+
+    web.run_downloads('SID=test', url, str(tmp_path), 1, 2)
+
+    assert len(created) == 1
+    notifier = created[0]
+    names = [name for name, _, _ in notifier.events]
+    assert names[0] == 'session_started'
+    assert 'archive_completed' in names
+    assert 'archive_not_found' in names
+    assert names[-1] == 'session_finished'
+    assert notifier.closed is True
